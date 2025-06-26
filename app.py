@@ -66,6 +66,8 @@ def load_borough_map():
 # run it
 df = load_live_data()
 borough_df = load_borough_map()
+df["ZIP"] = df["ZIP"].astype(str)
+borough_df["ZIP"] = borough_df["ZIP"].astype(str)
 df = df.merge(borough_df, on="ZIP", how="left")
 
 # borough filter
