@@ -3,19 +3,15 @@ import pandas as pd
 import plotly.express as px
 import requests
 
-# set up page layout
+# layout setup
 st.set_page_config(page_title="OrganizeNYC", layout="wide")
-st.title("🗳️ OrganizeNYC: Live Housing + Civic Data for NYC")
+st.title("🗳️ OrganizeNYC: Citywide Housing + Civic Data")
 
-# pull + merge live data with borough info
+# load and clean live data
 @st.cache_data
-def load_data():
-    # load zip to borough mapping
-    borough_df = pd.read_csv("borough_zip.csv")
-
-    # get 311 heat complaints
-    complaints_url = "https://data.cityofnewyork.us/resource/cewg-5fre.json?$limit=50000&$where=complaint_type%20like%20%27%25HEAT%25%27"
-    evictions_url = "https://data.cityofnewyork.us/resource/6z8x-wfk4.json?$limit=20000"
+def load_live_data():
+    complaints_url = "https://data.cityofnewyork.us/resource/cewg-5fre.json?$limit=10000&$where=complaint_type%20like%20%27%25HEAT%25%27"
+    evictions_url = "https://data.cityofnewyork.us/resource/6z8x-wfk4.json?$limit=5000"
 
     complaints_response = requests.get(complaints_url)
     evictions_response = requests.get(evictions_url)
@@ -23,33 +19,32 @@ def load_data():
     df_311 = pd.DataFrame(complaints_response.json())
     df_evictions = pd.DataFrame(evictions_response.json())
 
-    # process 311 data
+    # zip filter
     df_311 = df_311[df_311['incident_zip'].notna()]
     complaints_by_zip = df_311.groupby("incident_zip").size().reset_index(name="Housing_Complaints")
 
-    # process evictions
     df_evictions = df_evictions[df_evictions['eviction_zip'].notna()]
     evictions_by_zip = df_evictions.groupby("eviction_zip").size().reset_index(name="Evictions")
 
-    # merge datasets
     df = complaints_by_zip.merge(evictions_by_zip, left_on="incident_zip", right_on="eviction_zip", how="outer")
     df = df.rename(columns={"incident_zip": "ZIP"}).fillna(0)
 
-    # bring in borough info
-    df = df.merge(borough_df, on="ZIP", how="left")
-
-    # mock lat/lon, turnout, events for demo zip codes
+    # zip to lat/lon/turnout/events
     zip_meta = {
+        "10001": [40.7506, -73.9972, 41.2, 2],
+        "10002": [40.7170, -73.9870, 43.8, 0],
+        "10025": [40.7968, -73.9707, 44.5, 1],
+        "11211": [40.7081, -73.9571, 36.9, 2],
+        "11221": [40.6906, -73.9272, 31.4, 1],
+        "11368": [40.7473, -73.8726, 29.2, 0],
+        "11385": [40.7037, -73.8893, 30.0, 1],
+        "10451": [40.8198, -73.9223, 27.3, 0],
+        "10467": [40.8732, -73.8674, 25.6, 0],
+        "10301": [40.6300, -74.0942, 39.7, 0],
+        "10314": [40.6066, -74.1456, 41.1, 1],
         "11101": [40.7440, -73.9485, 38.2, 1],
-        "11102": [40.7760, -73.9235, 42.0, 0],
-        "11368": [40.7473, -73.8726, 34.5, 1],
-        "11377": [40.7427, -73.9047, 36.8, 0],
-        "11201": [40.6943, -73.9918, 43.1, 2],
-        "11211": [40.7081, -73.9571, 35.6, 2],
-        "10001": [40.7506, -73.9972, 39.0, 1],
-        "10002": [40.7170, -73.9870, 41.4, 0],
-        "10451": [40.8198, -73.9223, 31.2, 0],
-        "10301": [40.6300, -74.0942, 47.5, 0]
+        "11103": [40.7531, -73.9137, 40.1, 2],
+        "11105": [40.7789, -73.9105, 41.3, 3],
     }
 
     df["Latitude"] = df["ZIP"].map(lambda x: zip_meta.get(x, [None, None, None, None])[0])
@@ -57,27 +52,36 @@ def load_data():
     df["Turnout_Percent"] = df["ZIP"].map(lambda x: zip_meta.get(x, [None, None, None, None])[2])
     df["Campaign_Events"] = df["ZIP"].map(lambda x: zip_meta.get(x, [None, None, None, None])[3])
 
-    # score
     df["Priority_Score"] = (
         df["Housing_Complaints"] * (1 - df["Turnout_Percent"] / 100)
     ) / (df["Campaign_Events"] + 1)
 
     return df.dropna()
 
-df = load_data()
+# load borough info
+@st.cache_data
+def load_borough_map():
+    return pd.read_csv("borough_zip.csv")
+
+# run it
+df = load_live_data()
+borough_df = load_borough_map()
+df = df.merge(borough_df, on="ZIP", how="left")
 
 # borough filter
-boroughs = df["Borough"].dropna().unique()
-selected = st.sidebar.selectbox("Filter by Borough", options=["All"] + sorted(boroughs.tolist()))
+st.sidebar.subheader("📍 filter by borough")
+boroughs = df["Borough"].dropna().unique().tolist()
+selected_borough = st.sidebar.selectbox("Choose a borough", ["All"] + sorted(boroughs))
 
-if selected != "All":
-    df = df[df["Borough"] == selected]
+if selected_borough != "All":
+    df = df[df["Borough"] == selected_borough]
 
-# display data
+# show table
 st.subheader("📊 Neighborhood Data")
-st.dataframe(df[["Borough", "ZIP", "Housing_Complaints", "Evictions", "Turnout_Percent", "Campaign_Events", "Priority_Score"]])
+st.dataframe(df[["ZIP", "Borough", "Housing_Complaints", "Evictions", "Turnout_Percent", "Campaign_Events", "Priority_Score"]])
 
-st.subheader("🗺️ Heatmap")
+# show map
+st.subheader("🗺️ Housing & Civic Heatmap")
 fig = px.scatter_mapbox(
     df,
     lat="Latitude",
@@ -91,7 +95,8 @@ fig = px.scatter_mapbox(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-st.subheader("📍Top Areas to Prioritize")
-top_zips = df.sort_values("Priority_Score", ascending=False).head(5)
+# show recs
+st.subheader("✅ Top Areas to Prioritize")
+top_zips = df.sort_values("Priority_Score", ascending=False).head(3)
 for _, row in top_zips.iterrows():
-    st.markdown(f"- **ZIP {row['ZIP']}** ({row['Borough']}) → Priority Score: {row['Priority_Score']:.1f}")
+    st.markdown(f"- **ZIP {row['ZIP']}** → Priority Score: {row['Priority_Score']:.1f}")
