@@ -10,14 +10,15 @@ st.title("📦 OrganizeNYC: citywide housing + civic data")
 # load the zip to borough mapping live from nyc api
 @st.cache_data
 def load_borough_map():
-    url = "https://raw.githubusercontent.com/ResidentMario/mapping/master/data/nyc-zip-code-boroughs.csv"
+    url = "https://data.cityofnewyork.us/api/views/i8iw-xf4u/rows.csv?accessType=DOWNLOAD"
     df = pd.read_csv(url)
 
-    df = df.rename(columns={"zip": "ZIP", "borough": "Borough"})
+    # rename + standardize
+    df = df.rename(columns={"ZIPCODE": "ZIP", "BOROUGH": "Borough"})
     df["ZIP"] = df["ZIP"].astype(str).str.zfill(5)
 
-    return df
-
+    return df[["ZIP", "Borough"]]
+    
 # pull housing + eviction data live from nyc apis
 @st.cache_data
 def load_live_data():
