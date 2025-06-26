@@ -10,26 +10,13 @@ st.title("📦 OrganizeNYC: citywide housing + civic data")
 # load the zip to borough mapping live from nyc api
 @st.cache_data
 def load_borough_map():
-    url = "https://data.cityofnewyork.us/resource/jp4d-irnc.json?$select=zip,boro"
-    r = requests.get(url)
-    records = r.json()
+    url = "https://raw.githubusercontent.com/ResidentMario/mapping/master/data/nyc-zip-code-boroughs.csv"
+    df = pd.read_csv(url)
 
-    df = pd.DataFrame(records)
-
-    # log column names so we know what we're working with
-    st.write("borough df columns:", df.columns.tolist())
-
-    # make sure all lowercase
-    df.columns = df.columns.str.lower()
-
-    # rename to match merge expectations
-    df = df.rename(columns={"zip": "ZIP", "boro": "Borough"})
+    df = df.rename(columns={"zip": "ZIP", "borough": "Borough"})
     df["ZIP"] = df["ZIP"].astype(str).str.zfill(5)
-    df["Borough"] = df["Borough"].map({
-        "X": "Bronx", "M": "Manhattan", "K": "Brooklyn", "Q": "Queens", "R": "Staten Island"
-    })
 
-    return df.dropna()
+    return df
 
 # pull housing + eviction data live from nyc apis
 @st.cache_data
