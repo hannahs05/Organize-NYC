@@ -15,11 +15,20 @@ def load_borough_map():
     records = r.json()
 
     df = pd.DataFrame(records)
+
+    # log column names so we know what we're working with
+    st.write("borough df columns:", df.columns.tolist())
+
+    # make sure all lowercase
+    df.columns = df.columns.str.lower()
+
+    # rename to match merge expectations
     df = df.rename(columns={"zip": "ZIP", "boro": "Borough"})
     df["ZIP"] = df["ZIP"].astype(str).str.zfill(5)
     df["Borough"] = df["Borough"].map({
         "X": "Bronx", "M": "Manhattan", "K": "Brooklyn", "Q": "Queens", "R": "Staten Island"
     })
+
     return df.dropna()
 
 # pull housing + eviction data live from nyc apis
