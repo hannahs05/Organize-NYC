@@ -1,88 +1,104 @@
+# organize-nyc app with zip-level choropleth + scorecard + filters
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import json
 import requests
 
-# set up the layout
+# set up page
 st.set_page_config(page_title="OrganizeNYC", layout="wide")
-st.title("OrganizeNYC: Citywide Housing + Civic Data")
+st.title("🗳️ OrganizeNYC: Housing Distress & Civic Data in NYC")
 
-# load borough data from the local csv
-@st.cache_data
-def load_borough_map():
-    df = pd.read_csv("nyc-zip-codes.csv")
-    df["ZipCode"] = df["ZipCode"].astype(str).str.zfill(5)
-    return df.rename(columns={"ZipCode": "ZIP"})
+st.markdown("""
+This tool helps visualize areas in NYC with high housing complaints and low voter turnout.
+I'm a fan of Zohran Mamdani’s work and wanted to build a public resource that could support grassroots organizing.
+""")
 
-# pull and process live housing + eviction data
+# load housing complaint + eviction data from NYC open data
 @st.cache_data
-def load_live_data():
-    # 311 complaints api (filtering for heat complaints as proxy for housing issues)
+def load_data():
     complaints_url = "https://data.cityofnewyork.us/resource/cewg-5fre.json?$limit=10000&$where=complaint_type%20like%20%27%25HEAT%25%27"
     evictions_url = "https://data.cityofnewyork.us/resource/6z8x-wfk4.json?$limit=5000"
 
-    complaints_resp = requests.get(complaints_url)
-    evictions_resp = requests.get(evictions_url)
+    complaints = pd.DataFrame(requests.get(complaints_url).json())
+    evictions = pd.DataFrame(requests.get(evictions_url).json())
 
-    df_311 = pd.DataFrame(complaints_resp.json())
-    df_evictions = pd.DataFrame(evictions_resp.json())
+    complaints = complaints[complaints['incident_zip'].notna()]
+    evictions = evictions[evictions['eviction_zip'].notna()]
 
-    df_311 = df_311[df_311['incident_zip'].notna()]
-    df_evictions = df_evictions[df_evictions['eviction_zip'].notna()]
+    c_by_zip = complaints.groupby("incident_zip").size().reset_index(name="Housing_Complaints")
+    e_by_zip = evictions.groupby("eviction_zip").size().reset_index(name="Evictions")
 
-    complaints_by_zip = df_311.groupby("incident_zip").size().reset_index(name="Housing_Complaints")
-    evictions_by_zip = df_evictions.groupby("eviction_zip").size().reset_index(name="Evictions")
-
-    df = complaints_by_zip.merge(evictions_by_zip, left_on="incident_zip", right_on="eviction_zip", how="outer")
-    df = df.rename(columns={"incident_zip": "ZIP"}).fillna(0)
-
-    # mock values for turnout and campaign events
+    df = pd.merge(c_by_zip, e_by_zip, left_on="incident_zip", right_on="eviction_zip", how="outer")
+    df = df.rename(columns={"incident_zip": "ZIP"})
+    df = df.drop(columns=["eviction_zip"])
+    df = df.fillna(0)
     df["ZIP"] = df["ZIP"].astype(str).str.zfill(5)
-    df["Turnout_Percent"] = 35 + (df.index % 15)
-    df["Campaign_Events"] = df.index % 4
-
-    df["Priority_Score"] = (df["Housing_Complaints"] * (1 - df["Turnout_Percent"] / 100)) / (df["Campaign_Events"] + 1)
 
     return df
 
-# load and merge all data
-df_main = load_live_data()
-borough_df = load_borough_map()
-df = df_main.merge(borough_df[["ZIP", "Borough"]], on="ZIP", how="left")
+# load zip-to-borough-turnout-event info
+@st.cache_data
+def load_zip_meta():
+    df = pd.read_csv("nyc-zip-codes.csv")
+    df["ZIP"] = df["ZIP"].astype(str).str.zfill(5)
+    return df
 
-# sidebar filter
-st.sidebar.markdown("📍 **filter by borough**")
-boroughs = ["All"] + sorted(df["Borough"].dropna().unique())
-selected_borough = st.sidebar.selectbox("Choose a borough", boroughs)
+# load geojson
+@st.cache_data
+def load_geojson():
+    url = "https://raw.githubusercontent.com/OpenDataDE/State-zip-code-GeoJSON/main/ny_new_york_zip_codes_geo.min.json"
+    return requests.get(url).json()
 
-if selected_borough != "All":
-    df = df[df["Borough"] == selected_borough]
+# pull data
+df_data = load_data()
+df_meta = load_zip_meta()
+geojson = load_geojson()
 
-# show data
-st.subheader("📊 Neighborhood Data")
-st.dataframe(df[["ZIP", "Borough", "Housing_Complaints", "Evictions", "Turnout_Percent", "Campaign_Events", "Priority_Score"]])
+# combine
+df = pd.merge(df_data, df_meta, on="ZIP", how="left")
+df = df.dropna(subset=["Borough"])
+df["Turnout_Percent"] = df["Turnout_Percent"].astype(float)
+df["Campaign_Events"] = df["Campaign_Events"].astype(int)
 
-# placeholder coordinates for map
-df["Latitude"] = 40.7 + (df.index % 10) * 0.01
-df["Longitude"] = -73.9 + (df.index % 10) * 0.01
+# priority score
+df["Priority_Score"] = (
+    df["Housing_Complaints"] * (1 - df["Turnout_Percent"] / 100)
+) / (df["Campaign_Events"] + 1)
 
-# show map
-st.subheader("🗺️ Housing & Civic Heatmap")
-fig = px.scatter_mapbox(
-    df,
-    lat="Latitude",
-    lon="Longitude",
+# filters
+st.sidebar.subheader("Filter ZIPs")
+boroughs = st.sidebar.multiselect("Borough", sorted(df["Borough"].unique()), default=list(df["Borough"].unique()))
+min_turnout = st.sidebar.slider("Max Turnout %", 0, 100, 50)
+show_top = st.sidebar.checkbox("Show only top 10 ZIPs", False)
+
+filtered = df[df["Borough"].isin(boroughs)]
+filtered = filtered[filtered["Turnout_Percent"] <= min_turnout]
+if show_top:
+    filtered = filtered.sort_values("Priority_Score", ascending=False).head(10)
+
+# scorecard
+st.subheader("📍ZIP-Level Scorecard")
+st.dataframe(filtered[["ZIP", "Borough", "Housing_Complaints", "Evictions", "Turnout_Percent", "Campaign_Events", "Priority_Score"]].sort_values("Priority_Score", ascending=False))
+
+# map
+st.subheader("🗺️ Priority Heatmap by ZIP")
+fig = px.choropleth_mapbox(
+    filtered,
+    geojson=geojson,
+    locations="ZIP",
     color="Priority_Score",
-    size="Housing_Complaints",
-    hover_name="ZIP",
+    featureidkey="properties.ZCTA5CE10",
     mapbox_style="carto-positron",
-    zoom=10,
-    height=500
+    zoom=9,
+    center={"lat": 40.7128, "lon": -74.0060},
+    opacity=0.6,
+    hover_data=["ZIP", "Housing_Complaints", "Evictions", "Turnout_Percent", "Campaign_Events"]
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# top zip codes to focus on
-st.subheader("📌 Top Areas to Prioritize")
-top_zips = df.sort_values("Priority_Score", ascending=False).head(3)
-for _, row in top_zips.iterrows():
-    st.markdown(f"- **ZIP {row['ZIP']} ({row['Borough']})** → Priority Score: {row['Priority_Score']:.1f}")
+# footer
+st.markdown("---")
+st.markdown("""
+Built with ❤️ using [NYC Open Data](https://opendata.cityofnewyork.us/). Not affiliated with any official campaign.
+""")
