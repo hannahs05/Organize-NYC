@@ -40,10 +40,14 @@ def load_data():
 # load zip-to-borough-turnout-event info
 @st.cache_data
 def load_zip_meta():
+    # load csv of zip → borough + neighborhood
     df = pd.read_csv("nyc-zip-codes.csv")
-    df["ZIP"] = df["ZIP"].astype(str).str.zfill(5)
-    return df
 
+    # make sure the zip code is a string + zero-padded to 5 digits
+    df["ZIP"] = df["ZipCode"].astype(str).str.zfill(5)
+
+    return df[["ZIP", "Borough", "Neighborhood"]]
+    
 # load geojson
 @st.cache_data
 def load_geojson():
